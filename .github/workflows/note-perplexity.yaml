@@ -472,19 +472,30 @@ jobs:
               // ===== 本文入力 =====
               await bodyBox.click({ force: true });
               
-              // 全消し（Linux runner）
+              // 全消し
               await page.keyboard.press('Control+A');
               await page.keyboard.press('Backspace');
               
-              // クリップボード経由で貼り付け（ProseMirrorが反応しやすい）
-              await page.evaluate(async (t) => {
-                await navigator.clipboard.writeText(t);
-              }, BODY_TEXT);
+              // execCommand(insertText)で分割投入（ProseMirrorが拾いやすい）
+              async function insertByExecCommand(text) {
+                const chunk = 800;
+                for (let i = 0; i < text.length; i += chunk) {
+                  const part = text.slice(i, i + chunk);
               
-              await page.keyboard.press('Control+V');
-
-        
-              // 少し待って自動保存の発火を待つ
+                  await page.evaluate((t) => {
+                    // activeElement に対して insertText
+                    document.execCommand('insertText', false, t);
+                  }, part);
+              
+                  if (i % (chunk * 20) === 0) await page.waitForTimeout(50);
+                }
+              }
+              
+              // フォーカスを強制（念のため）
+              await bodyBox.evaluate(el => el.focus());
+              
+              await insertByExecCommand(BODY_TEXT);
+              
               await page.waitForTimeout(1500);
         
               if (!IS_PUBLIC) {
