@@ -1,0 +1,8 @@
+- name: Upload debug artifacts
+  if: ${{ always() }}
+  uses: actions/upload-artifact@v4
+  with:
+    name: note-debug
+    path: |
+      post.log
+      debug.html
