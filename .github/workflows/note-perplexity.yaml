@@ -282,20 +282,20 @@ jobs:
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
           });
 
-            await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+          await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 
-            page = await context.newPage();
-            page.setDefaultTimeout(180000);
+          page = await context.newPage();
+          page.setDefaultTimeout(180000);
 
-            page.on('console', msg => console.log('BROWSER_CONSOLE:', msg.type(), msg.text()));
-            page.on('pageerror', err => console.log('BROWSER_PAGEERROR:', err.message));
-            page.on('requestfailed', req => console.log('REQ_FAILED:', req.url(), req.failure()?.errorText));             
-            page.on('request', req => {
-              const u = req.url();
-              if (u.includes('note.com/api/v1/text_notes')) {
-                console.log('DEBUG_REQ:', req.method(), u);
-              }
-            });
+          page.on('console', msg => console.log('BROWSER_CONSOLE:', msg.type(), msg.text()));
+          page.on('pageerror', err => console.log('BROWSER_PAGEERROR:', err.message));
+          page.on('requestfailed', req => console.log('REQ_FAILED:', req.url(), req.failure()?.errorText));             
+          page.on('request', req => {
+            const u = req.url();
+            if (u.includes('note.com/api/v1/text_notes')) {
+              console.log('DEBUG_REQ:', req.method(), u);
+            }
+          });
             
             page.on('response', async res => {
               const u = res.url();
@@ -472,17 +472,20 @@ jobs:
             await page.waitForTimeout(200);
 
             if (!IS_PUBLIC) {
-              const saveBtn = page.locator('button:has-text("下書き保存"), [aria-label*="下書き保存"]').first();
-              await saveBtn.waitFor({ state: 'visible' });
-              if (await saveBtn.isEnabled()) {
-                await saveBtn.click();
-                await page.locator('text=保存しました').waitFor({ timeout: 4000 }).catch(() => {});
-              }
-              await page.screenshot({ path: SS_PATH, fullPage: true });
-              console.log('DRAFT_URL=' + page.url());
-              console.log('SCREENSHOT=' + SS_PATH);
-              return;
+            const saveBtn = page.locator('button:has-text("下書き保存"), [aria-label*="下書き保存"]').first();
+            await saveBtn.waitFor({ state: 'visible' });
+            if (await saveBtn.isEnabled()) {
+              await saveBtn.click();
+              await page.locator('text=保存しました').waitFor({ timeout: 4000 }).catch(() => {});
             }
+            await page.screenshot({ path: SS_PATH, fullPage: true });
+            console.log('DRAFT_URL=' + page.url());
+            console.log('SCREENSHOT=' + SS_PATH);
+          
+            // ★トップレベルreturn禁止なので、正常終了用の例外で抜ける（finallyは必ず走る）
+            throw new Error('__DONE_DRAFT__');
+          }
+
 
             const proceed = page.locator('button:has-text("公開に進む")').first();
             await proceed.waitFor({ state: 'visible' });
@@ -536,6 +539,10 @@ jobs:
           }
           EOF
           node post.mjs 2>&1 | tee -a post.log
+
+          mkdir -p note-screenshots || true
+          cp -r /tmp/note-screenshots/* note-screenshots/ 2>/dev/null || true
+
 
           url=$(grep '^PUBLISHED_URL=' post.log | tail -n1 | cut -d'=' -f2-)
           draft=$(grep '^DRAFT_URL=' post.log | tail -n1 | cut -d'=' -f2-)
