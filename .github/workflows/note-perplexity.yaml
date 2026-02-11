@@ -437,16 +437,18 @@ jobs:
             }
 
             // ---- タイトル/本文を「visible contenteditableの順序」で取る ----
-            const allEditable = page.locator('[contenteditable="true"]');
+            const editables = page.locator('[contenteditable="true"]');
+            const editableCount2 = await editables.count();
+            console.log('DEBUG_EDITABLE_COUNT2=', editableCount2);
             
-            // 画面上で見えてるものに絞る（width/heightで判定）
-            const visibleEditable = page.locator('[contenteditable="true"]').filter({
-              has: page.locator(':scope') // ダミー（Playwrightのfilter構文用）
-            });
+            if (editableCount2 < 2) {
+              fs.writeFileSync('debug.html', await page.content());
+              await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
+              throw new Error('Editor not ready (need >=2 contenteditable)');
+            }
             
-            // Playwrightだけでサイズ判定しにくいので、indexベースでまず当てる
-            const titleBox = allEditable.nth(0);
-            const bodyBox  = allEditable.nth(1);
+            const titleBox = editables.nth(0);
+            const bodyBox  = editables.nth(1);
             
             await titleBox.waitFor({ state: 'visible', timeout: 60000 });
             await bodyBox.waitFor({ state: 'visible', timeout: 60000 });
@@ -456,42 +458,11 @@ jobs:
             await page.keyboard.press('Control+A');
             await page.keyboard.type(TITLE, { delay: 5 });
 
-            
-            if (!titleLocator) {
-              await page.waitForTimeout(1500);
-              for (const sel of titleCandidates) {
-                const loc = page.locator(sel).first();
-                if (await loc.isVisible().catch(() => false)) { titleLocator = loc; break; }
-              }
-            }
-            if (!titleLocator) {
-              console.log('DEBUG_TITLE_NOT_FOUND_URL=' + page.url());
-              fs.writeFileSync('debug.html', await page.content());
-              await page.screenshot({ path: 'debug.png', fullPage: true });
-              throw new Error('Title input not found');
-            }
-
-            await titleLocator.waitFor({ state: 'visible', timeout: 180000 });
-
-            const tagName = await titleLocator.evaluate(el => el.tagName.toLowerCase());
-            if (tagName === 'textarea' || tagName === 'input') {
-              await titleLocator.fill(TITLE);
-            } else {
-              await titleLocator.click({ force: true });
-              await page.keyboard.press('Control+A');
-              await page.keyboard.type(TITLE, { delay: 5 });
-            }
-
-            const textboxes = page.locator('[contenteditable="true"][role="textbox"]');
-            await textboxes.first().waitFor({ state: 'visible' });
-
-            const bodyBox = textboxes.nth(1);
-            await bodyBox.waitFor({ state: 'visible', timeout: 180000 });
-
-            await bodyBox.click();
+            // 本文入力（HTML挿入）
+            await bodyBox.click({ force: true });
             await page.keyboard.press('Control+A');
             await page.keyboard.press('Backspace');
-
+            
             await insertHTML(page, bodyBox, rawBodyHtml);
             await page.waitForTimeout(200);
 
