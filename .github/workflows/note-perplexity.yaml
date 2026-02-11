@@ -285,17 +285,40 @@ jobs:
 
             await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
 
-            const editorReadySelectors = [
-              '[contenteditable="true"][data-placeholder*="記事タイトル"]',
-              '[contenteditable="true"][data-placeholder*="タイトル"]',
-              'text=下書き',
-            ];
-            const loginOrBlockSelectors = [
-              'text=ログイン',
-              'text=メールアドレス',
-              'text=パスワード',
-              'text=アクセスが制限されています',
-            ];
+            async function findVisibleInAnyFrame(page, selectorCsv) {
+            for (const fr of page.frames()) {
+              try {
+                const loc = fr.locator(selectorCsv).first();
+                if (await loc.isVisible({ timeout: 500 }).catch(() => false)) {
+                  return { frame: fr, locator: loc };
+                }
+              } catch {}
+            }
+            return null;
+          }
+          
+          const editorSel = editorReadySelectors.join(',');
+          const loginSel  = loginOrBlockSelectors.join(',');
+          
+          await Promise.race([
+            page.waitForTimeout(60000),
+            page.waitForSelector('iframe', { timeout: 60000 }).catch(() => {}),
+          ]).catch(() => {});
+          
+          const foundEditor = await findVisibleInAnyFrame(page, editorSel);
+          const foundLogin  = await findVisibleInAnyFrame(page, loginSel);
+          
+          console.log('DEBUG_FRAME_COUNT=', page.frames().length);
+          console.log('DEBUG_FRAMES=', page.frames().map(f => f.url()).join(' | '));
+          console.log('DEBUG_FOUND_EDITOR_IN_FRAME=', !!foundEditor);
+          console.log('DEBUG_FOUND_LOGIN_IN_FRAME=', !!foundLogin);
+          
+          if (!foundEditor) {
+            fs.writeFileSync('debug.html', await page.content());
+            await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
+            throw new Error('Editor not ready (no editor selector in any frame)');
+          }
+
 
             await Promise.race([
               page.waitForSelector(editorReadySelectors.join(','), { timeout: 60000 }),
