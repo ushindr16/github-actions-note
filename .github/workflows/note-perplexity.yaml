@@ -268,9 +268,37 @@ jobs:
             page.setDefaultTimeout(180000);
 
             await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+            // “描画された”判定に使える候補（note側のUI変化に備えて複数）
+            const editorReadySelectors = [
+              '[contenteditable="true"][data-placeholder*="記事タイトル"]',
+              '[contenteditable="true"][data-placeholder*="タイトル"]',
+              // もしヘッダーやメニューがあるならそれも
+              'text=下書き', // 例（実際に出る文言に合わせて）
+            ];
+            
+            const loginOrBlockSelectors = [
+              'text=ログイン',
+              'text=メールアドレス',
+              'text=パスワード',
+              'text=アクセスが制限されています',
+            ];
+            
+            await Promise.race([
+              page.waitForSelector(editorReadySelectors.join(','), { timeout: 60000 }),
+              page.waitForSelector(loginOrBlockSelectors.join(','), { timeout: 60000 }),
+            ]).catch(() => {});
             console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
             await page.screenshot({ path: SS_PATH, fullPage: true });
             console.log('SCREENSHOT=' + SS_PATH);
+            const isEditorReady = await page.locator(editorReadySelectors.join(',')).first().isVisible().catch(() => false);
+
+            if (!isEditorReady) {
+              console.log('DEBUG_NOT_EDITOR_READY_URL=' + page.url());
+              fs.writeFileSync('debug.html', await page.content());
+              await page.screenshot({ path: 'debug.png', fullPage: true });
+              throw new Error('Editor not ready (login required or blocked)');
+            }
+
 
             // タイトル
             // タイトル（UI変更に強い探索）
@@ -284,8 +312,6 @@ jobs:
             // 念のため role/aria-label 系
             '[contenteditable="true"][role="textbox"][aria-label*="記事タイトル"]',
             '[contenteditable="true"][role="textbox"][aria-label*="タイトル"]',
-            '[contenteditable="true"][role="textbox"][data-placeholder]',
-            '[contenteditable="true"][role="textbox"][aria-placeholder]',
           
             // 旧UI（残してOK）
             'textarea[placeholder*="タイトル"]',
