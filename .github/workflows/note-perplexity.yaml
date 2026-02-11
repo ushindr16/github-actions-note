@@ -273,12 +273,66 @@ jobs:
             console.log('SCREENSHOT=' + SS_PATH);
 
             // タイトル
-            await page.waitForSelector('textarea[placeholder*="タイトル"]');
-            await page.fill('textarea[placeholder*="タイトル"]', TITLE);
+            // タイトル（UI変更に強い探索）
+            const titleCandidates = [
+              // 旧UI
+              'textarea[placeholder*="タイトル"]',
+              'textarea[aria-label*="タイトル"]',
+              'input[placeholder*="タイトル"]',
+              'input[aria-label*="タイトル"]',
+            
+              // contenteditable になっているケース
+              '[contenteditable="true"][role="textbox"][aria-label*="タイトル"]',
+              '[contenteditable="true"][role="textbox"][data-testid*="title"]',
+              '[contenteditable="true"][data-testid*="title"]',
+            
+              // かなり広め（最終手段）
+              '[contenteditable="true"][role="textbox"]'
+            ];
+            
+            // SPAで描画が遅いことがあるので少し待つ
+            await page.waitForLoadState('networkidle').catch(() => {});
+            await page.waitForTimeout(500);
+            
+            let titleLocator = null;
+            for (const sel of titleCandidates) {
+              const loc = page.locator(sel).first();
+              if (await loc.count()) { titleLocator = loc; break; }
+            }
+            if (!titleLocator) {
+              // もう一回だけ待って再探索
+              await page.waitForTimeout(1500);
+              for (const sel of titleCandidates) {
+                const loc = page.locator(sel).first();
+                if (await loc.count()) { titleLocator = loc; break; }
+              }
+            }
+            if (!titleLocator) {
+              console.log('DEBUG_TITLE_NOT_FOUND_URL=' + page.url());
+              fs.writeFileSync('debug.html', await page.content());
+              throw new Error('Title input not found');
+            }
+            
+            await titleLocator.waitFor({ state: 'visible', timeout: 180000 });
+            
+            // textarea/input なら fill、contenteditable ならキーボード入力
+            const tagName = await titleLocator.evaluate(el => el.tagName.toLowerCase());
+            if (tagName === 'textarea' || tagName === 'input') {
+              await titleLocator.fill(TITLE);
+            } else {
+              await titleLocator.click({ force: true });
+              await page.keyboard.press('Control+A');
+              await page.keyboard.type(TITLE, { delay: 5 });
+            }
+
 
             // 本文（contenteditable）
-            const bodyBox = page.locator('div[contenteditable="true"][role="textbox"]').first();
-            await bodyBox.waitFor({ state: 'visible' });
+            // 本文（タイトルの次にある textbox を狙う）
+            const textboxes = page.locator('[contenteditable="true"][role="textbox"]');
+            await textboxes.first().waitFor({ state: 'visible' });
+            const bodyBox = textboxes.nth(1); // 0:タイトル、1:本文 になっているケースが多い
+            await bodyBox.waitFor({ state: 'visible', timeout: 180000 });
+
 
             // 既存内容を消してからHTML挿入
             await bodyBox.click();
