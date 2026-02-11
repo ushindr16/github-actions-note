@@ -328,10 +328,17 @@ jobs:
 
             // ① まずセレクタ配列を定義（←ここが先）
             const editorReadySelectors = [
-              '[contenteditable="true"][data-placeholder*="記事タイトル"]',
-              '[contenteditable="true"][data-placeholder*="タイトル"]',
-              'text=下書き',
-            ];
+            // 最も汎用：contenteditable の存在（タイトル/本文どちらでも）
+            '[contenteditable="true"]',
+          
+            // ありがちな：textbox role
+            '[contenteditable="true"][role="textbox"]',
+          
+            // 念のため：見出しっぽい要素（React/Nextのエディタで使われがち）
+            '[data-testid*="editor"]',
+            '[data-testid*="title"]',
+          ];
+
             
             const loginOrBlockSelectors = [
               'text=ログイン',
@@ -361,25 +368,42 @@ jobs:
             await page.waitForTimeout(1500);
             
             console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
+            const urlNow = page.url();
+            const isEditUrl = /\/notes\/[^/]+\/edit\/?/i.test(urlNow);
+            console.log('DEBUG_IS_EDIT_URL=', isEditUrl);
+            
+            if (!isEditUrl) {
+              // まだ /new のまま等なら、ここで待つ（最大60秒）
+              await page.waitForURL(/\/notes\/[^/]+\/edit\/?/i, { timeout: 60000 }).catch(() => {});
+              console.log('DEBUG_URL_AFTER_WAIT_EDIT=' + page.url());
+            }
+
             await page.screenshot({ path: SS_PATH, fullPage: true });
             console.log('SCREENSHOT=' + SS_PATH);
             
             console.log('DEBUG_FRAME_COUNT=', page.frames().length);
             console.log('DEBUG_FRAMES=', page.frames().map(f => f.url()).join(' | '));
+
+            // ---- ここが超重要：エディタのDOMが揃うまで待つ ----
+            await page.waitForFunction(() => {
+              const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+              const visible = els.filter(el => {
+                const r = el.getBoundingClientRect();
+                return r.width > 30 && r.height > 10;
+              });
+              return visible.length >= 2; // タイトル＋本文を期待
+            }, { timeout: 60000 }).catch(() => {});
+
+            const editable = page.locator('[contenteditable="true"]');
+            const editableCount = await editable.count();
+            console.log('DEBUG_EDITABLE_COUNT=', editableCount);
             
-            const foundEditor = await findVisibleInAnyFrame(page, editorSel);
-            const foundLogin  = await findVisibleInAnyFrame(page, loginSel);
-            
-            console.log('DEBUG_FOUND_EDITOR_IN_FRAME=', !!foundEditor);
-            if (foundEditor) console.log('DEBUG_EDITOR_FRAME_URL=', foundEditor.frame.url());
-            console.log('DEBUG_FOUND_LOGIN_IN_FRAME=', !!foundLogin);
-            if (foundLogin) console.log('DEBUG_LOGIN_FRAME_URL=', foundLogin.frame.url());
-            
-            if (!foundEditor) {
+            if (editableCount < 1) {
               fs.writeFileSync('debug.html', await page.content());
               await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
-              throw new Error('Editor not ready (no editor selector in any frame)');
+              throw new Error('Editor not ready (no contenteditable found)');
             }
+
 
 
 
@@ -412,27 +436,27 @@ jobs:
               }
             }
 
-            const titleCandidates = [
-              '[contenteditable="true"][data-placeholder*="記事タイトル"]',
-              '[contenteditable="true"][data-placeholder*="タイトル"]',
-              '[contenteditable="true"][aria-placeholder*="記事タイトル"]',
-              '[contenteditable="true"][aria-placeholder*="タイトル"]',
-              '[contenteditable="true"][role="textbox"][aria-label*="記事タイトル"]',
-              '[contenteditable="true"][role="textbox"][aria-label*="タイトル"]',
-              'textarea[placeholder*="タイトル"]',
-              'textarea[aria-label*="タイトル"]',
-              'input[placeholder*="タイトル"]',
-              'input[aria-label*="タイトル"]',
-            ];
+            // ---- タイトル/本文を「visible contenteditableの順序」で取る ----
+            const allEditable = page.locator('[contenteditable="true"]');
+            
+            // 画面上で見えてるものに絞る（width/heightで判定）
+            const visibleEditable = page.locator('[contenteditable="true"]').filter({
+              has: page.locator(':scope') // ダミー（Playwrightのfilter構文用）
+            });
+            
+            // Playwrightだけでサイズ判定しにくいので、indexベースでまず当てる
+            const titleBox = allEditable.nth(0);
+            const bodyBox  = allEditable.nth(1);
+            
+            await titleBox.waitFor({ state: 'visible', timeout: 60000 });
+            await bodyBox.waitFor({ state: 'visible', timeout: 60000 });
+            
+            // タイトル入力
+            await titleBox.click({ force: true });
+            await page.keyboard.press('Control+A');
+            await page.keyboard.type(TITLE, { delay: 5 });
 
-            await page.waitForLoadState('networkidle').catch(() => {});
-            await page.waitForTimeout(500);
-
-            let titleLocator = null;
-            for (const sel of titleCandidates) {
-              const loc = page.locator(sel).first();
-              if (await loc.isVisible().catch(() => false)) { titleLocator = loc; break; }
-            }
+            
             if (!titleLocator) {
               await page.waitForTimeout(1500);
               for (const sel of titleCandidates) {
