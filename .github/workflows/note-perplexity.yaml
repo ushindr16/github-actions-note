@@ -303,6 +303,7 @@ jobs:
               'text=アクセスが制限されています',
             ];
             
+            
             await Promise.race([
               page.waitForSelector(editorReadySelectors.join(','), { timeout: 60000 }),
               page.waitForSelector(loginOrBlockSelectors.join(','), { timeout: 60000 }),
