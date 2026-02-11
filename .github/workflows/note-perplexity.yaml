@@ -151,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IS_PUBLIC: ${{ github.event.inputs.is_public }}
-      STATE_JSON: ${{ secrets.NOTE_STORAGE_STATE_JSON }}
+      STATE_B64: ${{ secrets.NOTE_STORAGE_STATE_B64 }}
       START_URL: https://editor.note.com/new
     outputs:
       final_url: ${{ steps.publish.outputs.published_url || steps.publish.outputs.draft_url }}
@@ -169,13 +169,14 @@ jobs:
           npm init -y
           npm i playwright
           npx playwright install --with-deps chromium | cat
-
+          
       - name: Prepare storageState
         id: state
         run: |
-          test -n "$STATE_JSON" || (echo "ERROR: NOTE_STORAGE_STATE_JSON secret is not set" && exit 1)
+          test -n "$STATE_B64" || (echo "ERROR: NOTE_STORAGE_STATE_B64 secret is not set" && exit 1)
           mkdir -p "$RUNNER_TEMP"
-          echo "$STATE_JSON" > "$RUNNER_TEMP/note-state.json"
+          echo "$STATE_B64" | base64 -d > "$RUNNER_TEMP/note-state.json"
+          node -e "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/note-state.json','utf8')); console.log('storageState JSON OK')"
           echo "STATE_PATH=$RUNNER_TEMP/note-state.json" >> $GITHUB_OUTPUT
 
       - name: Ensure jq (post)
