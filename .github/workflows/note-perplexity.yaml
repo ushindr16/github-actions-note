@@ -259,8 +259,27 @@ jobs:
 
           let browser, context, page;
           try {
-            browser = await chromium.launch({ headless: true, args: ['--lang=ja-JP'] });
-            context = await browser.newContext({ storageState: STATE_PATH, locale: 'ja-JP' });
+            browser = await chromium.launch({
+            headless: true,
+            args: [
+              '--lang=ja-JP',
+              '--disable-blink-features=AutomationControlled',
+              '--no-sandbox',
+            ],
+          });
+          
+          context = await browser.newContext({
+            storageState: STATE_PATH,
+            locale: 'ja-JP',
+            viewport: { width: 1365, height: 900 },
+            userAgent:
+              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          });
+          
+          await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          });
+
             await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 
             page = await context.newPage();
@@ -268,12 +287,21 @@ jobs:
 
             page.on('console', msg => console.log('BROWSER_CONSOLE:', msg.type(), msg.text()));
             page.on('pageerror', err => console.log('BROWSER_PAGEERROR:', err.message));
-            page.on('requestfailed', req => console.log('REQ_FAILED:', req.url(), req.failure()?.errorText));
-            page.on('response', res => {
-              const status = res.status();
-              const url = res.url();
-              if (status >= 400 && /note\.com/.test(url)) console.log('HTTP_ERROR:', status, url);
+            page.on('requestfailed', req => console.log('REQ_FAILED:', req.url(), req.failure()?.errorText));             
+            page.on('request', req => {
+              const u = req.url();
+              if (u.includes('note.com/api/v1/text_notes')) {
+                console.log('DEBUG_REQ:', req.method(), u);
+              }
             });
+            
+            page.on('response', async res => {
+              const u = res.url();
+              if (u.includes('note.com/api/v1/text_notes')) {
+                console.log('DEBUG_RES:', res.status(), res.request().method(), u);
+              }
+            });
+            
 
             const rawState = fs.readFileSync(STATE_PATH, 'utf8');
             console.log('DEBUG_STATE_BYTES=', rawState.length);
@@ -289,7 +317,12 @@ jobs:
             console.log('DEBUG_current_user_body_head=', txt.slice(0, 200));
 
             await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
-         
+                 
+            await page.waitForTimeout(3000);
+            await context.storageState({ path: 'runtime-state.json' });
+            console.log('DEBUG_SAVED_RUNTIME_STATE=runtime-state.json');
+            
+
 
             // ① まずセレクタ配列を定義（←ここが先）
             const editorReadySelectors = [
