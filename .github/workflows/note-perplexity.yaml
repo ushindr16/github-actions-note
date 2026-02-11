@@ -283,64 +283,68 @@ jobs:
             console.log('DEBUG_NOTE_COOKIE_COUNT(before goto)=', noteCookies0.length);
             console.log('DEBUG_NOTE_COOKIE_NAMES(before goto)=', noteCookies0.map(c => c.name).slice(0, 30).join(','));
 
+            const resp = await context.request.get('https://note.com/api/v2/current_user');
+            console.log('DEBUG_current_user_status=', resp.status());
+            const txt = await resp.text();
+            console.log('DEBUG_current_user_body_head=', txt.slice(0, 200));
+
             await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+         
 
-          await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
-
-          // ① まずセレクタ配列を定義（←ここが先）
-          const editorReadySelectors = [
-            '[contenteditable="true"][data-placeholder*="記事タイトル"]',
-            '[contenteditable="true"][data-placeholder*="タイトル"]',
-            'text=下書き',
-          ];
-          
-          const loginOrBlockSelectors = [
-            'text=ログイン',
-            'text=メールアドレス',
-            'text=パスワード',
-            'text=アクセスが制限されています',
-          ];
-          
-          // ② その後に join して使う
-          const editorSel = editorReadySelectors.join(',');
-          const loginSel  = loginOrBlockSelectors.join(',');
-          
-          // ③ フレーム含めて探す関数
-          async function findVisibleInAnyFrame(page, selectorCsv) {
-            for (const fr of page.frames()) {
-              try {
-                const loc = fr.locator(selectorCsv).first();
-                if (await loc.isVisible({ timeout: 500 }).catch(() => false)) {
-                  return { frame: fr, locator: loc };
-                }
-              } catch {}
+            // ① まずセレクタ配列を定義（←ここが先）
+            const editorReadySelectors = [
+              '[contenteditable="true"][data-placeholder*="記事タイトル"]',
+              '[contenteditable="true"][data-placeholder*="タイトル"]',
+              'text=下書き',
+            ];
+            
+            const loginOrBlockSelectors = [
+              'text=ログイン',
+              'text=メールアドレス',
+              'text=パスワード',
+              'text=アクセスが制限されています',
+            ];
+            
+            // ② その後に join して使う
+            const editorSel = editorReadySelectors.join(',');
+            const loginSel  = loginOrBlockSelectors.join(',');
+            
+            // ③ フレーム含めて探す関数
+            async function findVisibleInAnyFrame(page, selectorCsv) {
+              for (const fr of page.frames()) {
+                try {
+                  const loc = fr.locator(selectorCsv).first();
+                  if (await loc.isVisible({ timeout: 500 }).catch(() => false)) {
+                    return { frame: fr, locator: loc };
+                  }
+                } catch {}
+              }
+              return null;
             }
-            return null;
-          }
-          
-          // ④ SPAなので少し待ってからフレーム走査
-          await page.waitForTimeout(1500);
-          
-          console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
-          await page.screenshot({ path: SS_PATH, fullPage: true });
-          console.log('SCREENSHOT=' + SS_PATH);
-          
-          console.log('DEBUG_FRAME_COUNT=', page.frames().length);
-          console.log('DEBUG_FRAMES=', page.frames().map(f => f.url()).join(' | '));
-          
-          const foundEditor = await findVisibleInAnyFrame(page, editorSel);
-          const foundLogin  = await findVisibleInAnyFrame(page, loginSel);
-          
-          console.log('DEBUG_FOUND_EDITOR_IN_FRAME=', !!foundEditor);
-          if (foundEditor) console.log('DEBUG_EDITOR_FRAME_URL=', foundEditor.frame.url());
-          console.log('DEBUG_FOUND_LOGIN_IN_FRAME=', !!foundLogin);
-          if (foundLogin) console.log('DEBUG_LOGIN_FRAME_URL=', foundLogin.frame.url());
-          
-          if (!foundEditor) {
-            fs.writeFileSync('debug.html', await page.content());
-            await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
-            throw new Error('Editor not ready (no editor selector in any frame)');
-          }
+            
+            // ④ SPAなので少し待ってからフレーム走査
+            await page.waitForTimeout(1500);
+            
+            console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
+            await page.screenshot({ path: SS_PATH, fullPage: true });
+            console.log('SCREENSHOT=' + SS_PATH);
+            
+            console.log('DEBUG_FRAME_COUNT=', page.frames().length);
+            console.log('DEBUG_FRAMES=', page.frames().map(f => f.url()).join(' | '));
+            
+            const foundEditor = await findVisibleInAnyFrame(page, editorSel);
+            const foundLogin  = await findVisibleInAnyFrame(page, loginSel);
+            
+            console.log('DEBUG_FOUND_EDITOR_IN_FRAME=', !!foundEditor);
+            if (foundEditor) console.log('DEBUG_EDITOR_FRAME_URL=', foundEditor.frame.url());
+            console.log('DEBUG_FOUND_LOGIN_IN_FRAME=', !!foundLogin);
+            if (foundLogin) console.log('DEBUG_LOGIN_FRAME_URL=', foundLogin.frame.url());
+            
+            if (!foundEditor) {
+              fs.writeFileSync('debug.html', await page.content());
+              await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
+              throw new Error('Editor not ready (no editor selector in any frame)');
+            }
 
 
 
