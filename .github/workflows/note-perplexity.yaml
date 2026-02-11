@@ -275,20 +275,24 @@ jobs:
             // タイトル
             // タイトル（UI変更に強い探索）
             const titleCandidates = [
-              // 旧UI
-              'textarea[placeholder*="タイトル"]',
-              'textarea[aria-label*="タイトル"]',
-              'input[placeholder*="タイトル"]',
-              'input[aria-label*="タイトル"]',
-            
-              // contenteditable になっているケース
-              '[contenteditable="true"][role="textbox"][aria-label*="タイトル"]',
-              '[contenteditable="true"][role="textbox"][data-testid*="title"]',
-              '[contenteditable="true"][data-testid*="title"]',
-            
-              // かなり広め（最終手段）
-              '[contenteditable="true"][role="textbox"]'
-            ];
+            // note現行で強い（最優先）
+            '[contenteditable="true"][data-placeholder*="記事タイトル"]',
+            '[contenteditable="true"][data-placeholder*="タイトル"]',
+            '[contenteditable="true"][aria-placeholder*="記事タイトル"]',
+            '[contenteditable="true"][aria-placeholder*="タイトル"]',
+          
+            // 念のため role/aria-label 系
+            '[contenteditable="true"][role="textbox"][aria-label*="記事タイトル"]',
+            '[contenteditable="true"][role="textbox"][aria-label*="タイトル"]',
+            '[contenteditable="true"][role="textbox"][data-placeholder]',
+            '[contenteditable="true"][role="textbox"][aria-placeholder]',
+          
+            // 旧UI（残してOK）
+            'textarea[placeholder*="タイトル"]',
+            'textarea[aria-label*="タイトル"]',
+            'input[placeholder*="タイトル"]',
+            'input[aria-label*="タイトル"]',
+          ];
             
             // SPAで描画が遅いことがあるので少し待つ
             await page.waitForLoadState('networkidle').catch(() => {});
@@ -297,8 +301,9 @@ jobs:
             let titleLocator = null;
             for (const sel of titleCandidates) {
               const loc = page.locator(sel).first();
-              if (await loc.count()) { titleLocator = loc; break; }
+              if (await loc.isVisible().catch(() => false)) { titleLocator = loc; break; }
             }
+
             if (!titleLocator) {
               // もう一回だけ待って再探索
               await page.waitForTimeout(1500);
