@@ -199,7 +199,9 @@ jobs:
           TITLE: ${{ steps.draft.outputs.TITLE }}
           TAGS: ${{ steps.draft.outputs.TAGS }}
           STATE_PATH: ${{ steps.state.outputs.STATE_PATH }}
+          
         run: |
+          : > post.log
           cat > post.mjs <<'EOF'
           import { chromium } from 'playwright';
           import fs from 'fs';
@@ -479,7 +481,7 @@ jobs:
               await page.screenshot({ path: SS_PATH, fullPage: true });
               console.log('DRAFT_URL=' + page.url());
               console.log('SCREENSHOT=' + SS_PATH);
-              process.exit(0);
+              return;
             }
 
             const proceed = page.locator('button:has-text("公開に進む")').first();
@@ -533,7 +535,7 @@ jobs:
             try { await browser?.close(); } catch {}
           }
           EOF
-          node post.mjs | tee post.log
+          node post.mjs 2>&1 | tee -a post.log
 
           url=$(grep '^PUBLISHED_URL=' post.log | tail -n1 | cut -d'=' -f2-)
           draft=$(grep '^DRAFT_URL=' post.log | tail -n1 | cut -d'=' -f2-)
@@ -556,4 +558,5 @@ jobs:
             debug-login.png
             debug-not-ready.png
             trace.zip
-            /tmp/note-screenshots/**
+            note-screenshots/**
+
