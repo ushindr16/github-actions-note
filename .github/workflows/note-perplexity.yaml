@@ -128,6 +128,9 @@ jobs:
         with:
           name: extracted-article
           path: final.json
+                debug-title.html
+                debug-title.png
+
 
       - name: Collect final
         id: collect
@@ -436,33 +439,64 @@ jobs:
               }
             }
 
-            // ---- タイトル/本文を「visible contenteditableの順序」で取る ----
-            const editables = page.locator('[contenteditable="true"]');
-            const editableCount2 = await editables.count();
-            console.log('DEBUG_EDITABLE_COUNT2=', editableCount2);
-            
-            if (editableCount2 < 2) {
-              fs.writeFileSync('debug.html', await page.content());
-              await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
-              throw new Error('Editor not ready (need >=2 contenteditable)');
-            }
-            
-            const titleBox = editables.nth(0);
-            const bodyBox  = editables.nth(1);
-            
-            await titleBox.waitFor({ state: 'visible', timeout: 60000 });
+           // ===== タイトルは別要素、本文は contenteditable(0) を使う =====
+
+            // 本文（唯一のcontenteditable）
+            const bodyBox = page.locator('[contenteditable="true"]').first();
             await bodyBox.waitFor({ state: 'visible', timeout: 60000 });
             
-            // タイトル入力
-            await titleBox.click({ force: true });
-            await page.keyboard.press('Control+A');
-            await page.keyboard.type(TITLE, { delay: 5 });
-
+            // タイトル（候補を広めに）
+            const titleCandidates = [
+              // input/textarea 系（titleっぽい placeholder / name）
+              'input[placeholder*="タイトル"]',
+              'textarea[placeholder*="タイトル"]',
+              'input[name*="title" i]',
+              'textarea[name*="title" i]',
+            
+              // label / aria
+              'input[aria-label*="タイトル"]',
+              'textarea[aria-label*="タイトル"]',
+            
+              // data-testid / testid
+              '[data-testid*="title" i] input',
+              '[data-testid*="title" i] textarea',
+              '[data-testid*="title" i]',
+            
+              // role=textbox がタイトル側に付くケース
+              '[role="textbox"][aria-label*="タイトル"]',
+              '[role="textbox"][data-testid*="title" i]',
+            
+              // 最終手段：見出し入力っぽい1行textbox（複数ある場合は後で調整）
+              'input[type="text"]',
+            ];
+            
+            let titleEl = null;
+            for (const sel of titleCandidates) {
+              const loc = page.locator(sel).first();
+              if (await loc.isVisible().catch(() => false)) { titleEl = loc; break; }
+            }
+            
+            if (!titleEl) {
+              // DOM確認用にHTML/スクショ残して落とす
+              fs.writeFileSync('debug-title.html', await page.content());
+              await page.screenshot({ path: 'debug-title.png', fullPage: true });
+              throw new Error('Title element not found (candidates exhausted)');
+            }
+            
+            // タイトル入力（input/textareaならfill、それ以外はキーボード）
+            const tagName = await titleEl.evaluate(el => el.tagName.toLowerCase());
+            if (tagName === 'input' || tagName === 'textarea') {
+              await titleEl.fill(TITLE);
+            } else {
+              await titleEl.click({ force: true });
+              await page.keyboard.press('Control+A');
+              await page.keyboard.type(TITLE, { delay: 5 });
+            }
+            
             // 本文入力（HTML挿入）
             await bodyBox.click({ force: true });
             await page.keyboard.press('Control+A');
             await page.keyboard.press('Backspace');
-            
             await insertHTML(page, bodyBox, rawBodyHtml);
             await page.waitForTimeout(200);
 
