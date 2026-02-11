@@ -265,8 +265,28 @@ jobs:
             browser = await chromium.launch({ headless: true, args: ['--lang=ja-JP'] });
             context = await browser.newContext({ storageState: STATE_PATH, locale: 'ja-JP' });
             page = await context.newPage();
-            page.setDefaultTimeout(180000);
+            await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+            page.on('console', msg => console.log('BROWSER_CONSOLE:', msg.type(), msg.text()));
+            page.on('pageerror', err => console.log('BROWSER_PAGEERROR:', err.message));
+            page.on('requestfailed', req => console.log('REQ_FAILED:', req.url(), req.failure()?.errorText));
+            
+            page.on('response', res => {
+              const status = res.status();
+              const url = res.url();
+              if (status >= 400 && /note\.com/.test(url)) {
+                console.log('HTTP_ERROR:', status, url);
+              }
+            });
 
+            page.setDefaultTimeout(180000);
+            const rawState = fs.readFileSync(STATE_PATH, 'utf8');
+            console.log('DEBUG_STATE_BYTES=', rawState.length);
+            
+            const cookies0 = await context.cookies();
+            const noteCookies0 = cookies0.filter(c => (c.domain || '').includes('note.com'));
+            console.log('DEBUG_NOTE_COOKIE_COUNT(before goto)=', noteCookies0.length);
+            console.log('DEBUG_NOTE_COOKIE_NAMES(before goto)=', noteCookies0.map(c => c.name).slice(0, 30).join(','));
+            
             await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
             // “描画された”判定に使える候補（note側のUI変化に備えて複数）
             const editorReadySelectors = [
@@ -290,14 +310,27 @@ jobs:
             console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
             await page.screenshot({ path: SS_PATH, fullPage: true });
             console.log('SCREENSHOT=' + SS_PATH);
-            const isEditorReady = await page.locator(editorReadySelectors.join(',')).first().isVisible().catch(() => false);
-
+            const editorReady = page.locator(editorReadySelectors.join(',')).first();
+            const loginLike = page.locator(loginOrBlockSelectors.join(',')).first();
+            
+            const isEditorReady = await editorReady.isVisible().catch(() => false);
+            const isLoginLike = await loginLike.isVisible().catch(() => false);
+            
+            console.log('DEBUG_IS_EDITOR_READY=', isEditorReady);
+            console.log('DEBUG_IS_LOGIN_LIKE=', isLoginLike);
+            
             if (!isEditorReady) {
-              console.log('DEBUG_NOT_EDITOR_READY_URL=' + page.url());
               fs.writeFileSync('debug.html', await page.content());
-              await page.screenshot({ path: 'debug.png', fullPage: true });
-              throw new Error('Editor not ready (login required or blocked)');
+            
+              if (isLoginLike) {
+                await page.screenshot({ path: 'debug-login.png', fullPage: true });
+                throw new Error('Not logged in (login UI detected)');
+              } else {
+                await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
+                throw new Error('Editor not ready (JS init failed / blocked / network)');
+              }
             }
+
 
 
             // タイトル
@@ -386,16 +419,6 @@ jobs:
               process.exit(0);
             }
 
-            try {
-            await page.waitForSelector('textarea[placeholder*="タイトル"]', { timeout: 180000 });
-          } catch (e) {
-            console.log('DEBUG_TITLE_NOT_FOUND_URL=' + page.url());
-            fs.writeFileSync('debug.html', await page.content());
-            await page.screenshot({ path: SS_PATH, fullPage: true });
-            console.log('SCREENSHOT=' + SS_PATH);
-            throw e;
-          }
-
 
             const proceed = page.locator('button:has-text("公開に進む")').first();
             await proceed.waitFor({ state: 'visible' });
@@ -442,7 +465,8 @@ jobs:
             const finalUrl = page.url();
             console.log('PUBLISHED_URL=' + finalUrl);
             console.log('SCREENSHOT=' + SS_PATH);
-          } finally {
+          }  {
+            try { await context?.tracing?.stop({ path: 'trace.zip' }); } catch {}
             try { await page?.close(); } catch {}
             try { await context?.close(); } catch {}
             try { await browser?.close(); } catch {}
@@ -455,6 +479,22 @@ jobs:
           if [ -n "$url" ]; then echo "published_url=$url" >> $GITHUB_OUTPUT; fi
           if [ -n "$draft" ]; then echo "draft_url=$draft" >> $GITHUB_OUTPUT; fi
           if [ -n "$shot" ]; then echo "screenshot=$shot" >> $GITHUB_OUTPUT; fi
+
+          - name: Upload debug artifacts
+            if: ${{ always() }}
+            uses: actions/upload-artifact@v4
+            with:
+              name: note-debug-${{ github.run_id }}
+              if-no-files-found: warn
+              path: |
+                post.log
+                debug.html
+                debug.png
+                debug-login.png
+                debug-not-ready.png
+                trace.zip
+                /tmp/note-screenshots/**
+
 
       - name: Upload screenshot (if any)
         if: ${{ steps.publish.outputs.screenshot != '' }}
