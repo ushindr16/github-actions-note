@@ -301,6 +301,9 @@ jobs:
         
             const TITLE = sanitizeTitle(rawTitle);
             const BODY_TEXT = htmlToText(rawBodyHtml);
+            console.log('DEBUG_BODY_TEXT_LEN=', BODY_TEXT.length);
+            console.log('DEBUG_BODY_TEXT_HEAD=', BODY_TEXT.slice(0, 200));
+
         
             const ssDir = path.join(os.tmpdir(), 'note-screenshots');
             fs.mkdirSync(ssDir, { recursive: true });
@@ -370,15 +373,53 @@ jobs:
               console.log('SCREENSHOT=' + SS_PATH);
         
               // ===== 本文エディタ(ProseMirror)を特定 =====
-              // まず ProseMirror を最優先、なければ contenteditable
-              let bodyBox = page.locator('.ProseMirror[contenteditable="true"]').first();
-              if (!(await bodyBox.count())) {
-                bodyBox = page.locator('[contenteditable="true"]').first();
+              const bodyCandidates = [
+                // data-testid 系（noteが持ってることが多い）
+                '[data-testid*="editor" i] .ProseMirror[contenteditable="true"]',
+                '[data-testid*="body" i] .ProseMirror[contenteditable="true"]',
+              
+                // よくある構造
+                'main .ProseMirror[contenteditable="true"]',
+                'article .ProseMirror[contenteditable="true"]',
+              
+                // 最終手段：ProseMirror複数なら「2つ目以降」を本文とみなす
+                '.ProseMirror[contenteditable="true"]',
+              ];
+              
+              let bodyBox = null;
+              
+              // 1) セレクタ候補を上から試す
+              for (const sel of bodyCandidates) {
+                const loc = page.locator(sel);
+                const n = await loc.count().catch(() => 0);
+                if (n === 0) continue;
+              
+                // selが広すぎる場合を考慮して「画面内で大きい要素」を本文とみなす
+                let best = null;
+                let bestArea = 0;
+                for (let i = 0; i < n; i++) {
+                  const el = loc.nth(i);
+                  if (!(await el.isVisible().catch(() => false))) continue;
+                  const box = await el.boundingBox().catch(() => null);
+                  if (!box) continue;
+                  const area = box.width * box.height;
+                  if (area > bestArea) {
+                    bestArea = area;
+                    best = el;
+                  }
+                }
+                if (best) { bodyBox = best; break; }
               }
+              
+              if (!bodyBox) {
+                fs.writeFileSync('debug-body.html', await page.content());
+                await page.screenshot({ path: 'debug-body.png', fullPage: true });
+                throw new Error('Body editor not found');
+              }
+              
               await bodyBox.waitFor({ state: 'visible', timeout: 60000 });
-        
-              const editableCount = await page.locator('[contenteditable="true"]').count();
-              console.log('DEBUG_EDITABLE_COUNT=', editableCount);
+              console.log('DEBUG_BODY_BOX_FOUND=', await bodyBox.evaluate(el => el.className));
+
         
               // ===== タイトルを特定（あなたのスクショでは本文とは別要素）=====
               const titleCandidates = [
@@ -428,7 +469,20 @@ jobs:
               await page.keyboard.press('Backspace');
         
               // ProseMirrorは insertHTML が不安定なので insertText で流し込む
-              await typeLargeText(page, BODY_TEXT);
+              // ===== 本文入力 =====
+              await bodyBox.click({ force: true });
+              
+              // 全消し（Linux runner）
+              await page.keyboard.press('Control+A');
+              await page.keyboard.press('Backspace');
+              
+              // クリップボード経由で貼り付け（ProseMirrorが反応しやすい）
+              await page.evaluate(async (t) => {
+                await navigator.clipboard.writeText(t);
+              }, BODY_TEXT);
+              
+              await page.keyboard.press('Control+V');
+
         
               // 少し待って自動保存の発火を待つ
               await page.waitForTimeout(1500);
@@ -446,6 +500,14 @@ jobs:
                 console.log('SCREENSHOT=' + SS_PATH);
                 return; // main() 内なので合法
               }
+
+              const bodyTextNow = await bodyBox.evaluate(el => el.innerText || '');
+              console.log('DEBUG_BODY_AFTER_LEN=', bodyTextNow.trim().length);
+              if (bodyTextNow.trim().length < 20) {
+                await page.screenshot({ path: 'debug-body-after.png', fullPage: true });
+                throw new Error('Body seems not inserted (too short). Check selectors.');
+              }
+
         
               // ===== 公開フロー（必要なら後で調整）=====
               const proceed = page.locator('button:has-text("公開に進む")').first();
