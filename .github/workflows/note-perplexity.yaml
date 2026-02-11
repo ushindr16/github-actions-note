@@ -285,7 +285,28 @@ jobs:
 
             await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
 
-            async function findVisibleInAnyFrame(page, selectorCsv) {
+          await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+
+          // ① まずセレクタ配列を定義（←ここが先）
+          const editorReadySelectors = [
+            '[contenteditable="true"][data-placeholder*="記事タイトル"]',
+            '[contenteditable="true"][data-placeholder*="タイトル"]',
+            'text=下書き',
+          ];
+          
+          const loginOrBlockSelectors = [
+            'text=ログイン',
+            'text=メールアドレス',
+            'text=パスワード',
+            'text=アクセスが制限されています',
+          ];
+          
+          // ② その後に join して使う
+          const editorSel = editorReadySelectors.join(',');
+          const loginSel  = loginOrBlockSelectors.join(',');
+          
+          // ③ フレーム含めて探す関数
+          async function findVisibleInAnyFrame(page, selectorCsv) {
             for (const fr of page.frames()) {
               try {
                 const loc = fr.locator(selectorCsv).first();
@@ -297,27 +318,30 @@ jobs:
             return null;
           }
           
-          const editorSel = editorReadySelectors.join(',');
-          const loginSel  = loginOrBlockSelectors.join(',');
+          // ④ SPAなので少し待ってからフレーム走査
+          await page.waitForTimeout(1500);
           
-          await Promise.race([
-            page.waitForTimeout(60000),
-            page.waitForSelector('iframe', { timeout: 60000 }).catch(() => {}),
-          ]).catch(() => {});
+          console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
+          await page.screenshot({ path: SS_PATH, fullPage: true });
+          console.log('SCREENSHOT=' + SS_PATH);
+          
+          console.log('DEBUG_FRAME_COUNT=', page.frames().length);
+          console.log('DEBUG_FRAMES=', page.frames().map(f => f.url()).join(' | '));
           
           const foundEditor = await findVisibleInAnyFrame(page, editorSel);
           const foundLogin  = await findVisibleInAnyFrame(page, loginSel);
           
-          console.log('DEBUG_FRAME_COUNT=', page.frames().length);
-          console.log('DEBUG_FRAMES=', page.frames().map(f => f.url()).join(' | '));
           console.log('DEBUG_FOUND_EDITOR_IN_FRAME=', !!foundEditor);
+          if (foundEditor) console.log('DEBUG_EDITOR_FRAME_URL=', foundEditor.frame.url());
           console.log('DEBUG_FOUND_LOGIN_IN_FRAME=', !!foundLogin);
+          if (foundLogin) console.log('DEBUG_LOGIN_FRAME_URL=', foundLogin.frame.url());
           
           if (!foundEditor) {
             fs.writeFileSync('debug.html', await page.content());
             await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
             throw new Error('Editor not ready (no editor selector in any frame)');
           }
+
 
 
             await Promise.race([
