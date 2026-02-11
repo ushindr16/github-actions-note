@@ -3,7 +3,7 @@ name: Note Workflow (SEO URL -> note)
 on:
   workflow_dispatch:
     inputs:
-      seo_url:
+      article_url:
         description: '投稿元のSEO記事URL'
         required: true
         type: string
@@ -40,7 +40,7 @@ jobs:
     name: Fetch SEO article (Extract title/body)
     runs-on: ubuntu-latest
     env:
-      SEO_URL: ${{ github.event.inputs.seo_url }}
+      article_url: ${{ github.event.inputs.article_url }}
       INPUT_TAGS: ${{ github.event.inputs.tags }}
     outputs:
       final_b64: ${{ steps.collect.outputs.final_b64 }}
@@ -71,10 +71,10 @@ jobs:
             return new URL(encoded).toString();
           }
 
-          const raw = process.env.SEO_URL || '';
+          const raw = process.env.article_url || '';
           const url = normalizeUrl(raw);
           if (!url) {
-            console.error('SEO_URL is empty');
+            console.error('article_url is empty');
             process.exit(1);
           }
 
