@@ -268,6 +268,9 @@ jobs:
             page.setDefaultTimeout(180000);
 
             await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+            console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
+            await page.screenshot({ path: SS_PATH, fullPage: true });
+            console.log('SCREENSHOT=' + SS_PATH);
 
             // タイトル
             await page.waitForSelector('textarea[placeholder*="タイトル"]');
@@ -297,6 +300,17 @@ jobs:
               console.log('SCREENSHOT=' + SS_PATH);
               process.exit(0);
             }
+
+            try {
+            await page.waitForSelector('textarea[placeholder*="タイトル"]', { timeout: 180000 });
+          } catch (e) {
+            console.log('DEBUG_TITLE_NOT_FOUND_URL=' + page.url());
+            fs.writeFileSync('debug.html', await page.content());
+            await page.screenshot({ path: SS_PATH, fullPage: true });
+            console.log('SCREENSHOT=' + SS_PATH);
+            throw e;
+          }
+
 
             const proceed = page.locator('button:has-text("公開に進む")').first();
             await proceed.waitFor({ state: 'visible' });
