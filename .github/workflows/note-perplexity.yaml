@@ -210,33 +210,12 @@ jobs:
           import fs from 'fs';
           import os from 'os';
           import path from 'path';
-
+        
           function nowStr() {
             const d = new Date();
             const z = n => String(n).padStart(2, '0');
             return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}-${z(d.getSeconds())}`;
           }
-
-          const STATE_PATH = process.env.STATE_PATH;
-          const START_URL = process.env.START_URL || 'https://editor.note.com/new';
-          const rawTitle = process.env.TITLE || '';
-          const rawFinal = JSON.parse(fs.readFileSync('final.json', 'utf8'));
-          const rawBodyHtml = String(rawFinal.body_html || '');
-          const TAGS = process.env.TAGS || '';
-          const IS_PUBLIC = String(process.env.IS_PUBLIC || 'false') === 'true';
-
-          if (!fs.existsSync(STATE_PATH)) {
-            console.error('storageState not found:', STATE_PATH);
-            process.exit(1);
-          }
-          if (!rawBodyHtml.trim()) {
-            console.error('body_html is empty in final.json');
-            process.exit(1);
-          }
-
-          const ssDir = path.join(os.tmpdir(), 'note-screenshots');
-          fs.mkdirSync(ssDir, { recursive: true });
-          const SS_PATH = path.join(ssDir, `note-post-${nowStr()}.png`);
 
           function sanitizeTitle(t) {
             let s = String(t || '').trim();
@@ -246,8 +225,8 @@ jobs:
             return s;
           }
 
-          async function insertHTML(page, locator, html) {
-            await locator.click();
+          async function insertHTML(locator, html) {
+            await locator.click({ force: true });
             await locator.evaluate((el, html) => {
               el.focus();
               const sel = window.getSelection();
@@ -260,339 +239,197 @@ jobs:
             }, html);
           }
 
-          const TITLE = sanitizeTitle(rawTitle);
-
-          let browser, context, page;
-          try {
-            browser = await chromium.launch({
-            headless: true,
-            args: [
-              '--lang=ja-JP',
-              '--disable-blink-features=AutomationControlled',
-              '--no-sandbox',
-            ],
-          });
-          
-          context = await browser.newContext({
-            storageState: STATE_PATH,
-            locale: 'ja-JP',
-            viewport: { width: 1365, height: 900 },
-            userAgent:
-              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          });
-          
-          await context.addInitScript(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-          });
-
-          await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-
-          page = await context.newPage();
-          page.setDefaultTimeout(180000);
-
-          page.on('console', msg => console.log('BROWSER_CONSOLE:', msg.type(), msg.text()));
-          page.on('pageerror', err => console.log('BROWSER_PAGEERROR:', err.message));
-          page.on('requestfailed', req => console.log('REQ_FAILED:', req.url(), req.failure()?.errorText));             
-          page.on('request', req => {
-            const u = req.url();
-            if (u.includes('note.com/api/v1/text_notes')) {
-              console.log('DEBUG_REQ:', req.method(), u);
+          async function main() {
+            const STATE_PATH = process.env.STATE_PATH;
+            const START_URL = process.env.START_URL || 'https://editor.note.com/new';
+            const rawTitle = process.env.TITLE || '';
+            const rawFinal = JSON.parse(fs.readFileSync('final.json', 'utf8'));
+            const rawBodyHtml = String(rawFinal.body_html || '');
+            const TAGS = process.env.TAGS || '';
+            const IS_PUBLIC = String(process.env.IS_PUBLIC || 'false') === 'true';
+        
+            if (!fs.existsSync(STATE_PATH)) {
+              console.error('storageState not found:', STATE_PATH);
+              process.exit(1);
             }
-          });
-            
-            page.on('response', async res => {
-              const u = res.url();
-              if (u.includes('note.com/api/v1/text_notes')) {
-                console.log('DEBUG_RES:', res.status(), res.request().method(), u);
-              }
-            });
-            
-
-            const rawState = fs.readFileSync(STATE_PATH, 'utf8');
-            console.log('DEBUG_STATE_BYTES=', rawState.length);
-
-            const cookies0 = await context.cookies();
-            const noteCookies0 = cookies0.filter(c => (c.domain || '').includes('note.com'));
-            console.log('DEBUG_NOTE_COOKIE_COUNT(before goto)=', noteCookies0.length);
-            console.log('DEBUG_NOTE_COOKIE_NAMES(before goto)=', noteCookies0.map(c => c.name).slice(0, 30).join(','));
-
-            const resp = await context.request.get('https://note.com/api/v2/current_user');
-            console.log('DEBUG_current_user_status=', resp.status());
-            const txt = await resp.text();
-            console.log('DEBUG_current_user_body_head=', txt.slice(0, 200));
-
-            await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
-                 
-            await page.waitForTimeout(3000);
-            await context.storageState({ path: 'runtime-state.json' });
-            console.log('DEBUG_SAVED_RUNTIME_STATE=runtime-state.json');
-            
-
-
-            // ① まずセレクタ配列を定義（←ここが先）
-            const editorReadySelectors = [
-            // 最も汎用：contenteditable の存在（タイトル/本文どちらでも）
-            '[contenteditable="true"]',
-          
-            // ありがちな：textbox role
-            '[contenteditable="true"][role="textbox"]',
-          
-            // 念のため：見出しっぽい要素（React/Nextのエディタで使われがち）
-            '[data-testid*="editor"]',
-            '[data-testid*="title"]',
-          ];
-
-            
-            const loginOrBlockSelectors = [
-              'text=ログイン',
-              'text=メールアドレス',
-              'text=パスワード',
-              'text=アクセスが制限されています',
-            ];
-            
-            // ② その後に join して使う
-            const editorSel = editorReadySelectors.join(',');
-            const loginSel  = loginOrBlockSelectors.join(',');
-            
-            // ③ フレーム含めて探す関数
-            async function findVisibleInAnyFrame(page, selectorCsv) {
-              for (const fr of page.frames()) {
-                try {
-                  const loc = fr.locator(selectorCsv).first();
-                  if (await loc.isVisible({ timeout: 500 }).catch(() => false)) {
-                    return { frame: fr, locator: loc };
-                  }
-                } catch {}
-              }
-              return null;
+            if (!rawBodyHtml.trim()) {
+              console.error('body_html is empty in final.json');
+              process.exit(1);
             }
-            
-            // ④ SPAなので少し待ってからフレーム走査
-            await page.waitForTimeout(1500);
-            
-            console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
-            const urlNow = page.url();
-            const isEditUrl = /\/notes\/[^/]+\/edit\/?/i.test(urlNow);
-            console.log('DEBUG_IS_EDIT_URL=', isEditUrl);
-            
-            if (!isEditUrl) {
-              // まだ /new のまま等なら、ここで待つ（最大60秒）
+        
+            const ssDir = path.join(os.tmpdir(), 'note-screenshots');
+            fs.mkdirSync(ssDir, { recursive: true });
+            const SS_PATH = path.join(ssDir, `note-post-${nowStr()}.png`);
+        
+            const TITLE = sanitizeTitle(rawTitle);
+        
+            let browser, context, page;
+            try {
+              browser = await chromium.launch({
+                headless: true,
+                args: [
+                  '--lang=ja-JP',
+                  '--disable-blink-features=AutomationControlled',
+                  '--no-sandbox',
+                ],
+              });
+
+              context = await browser.newContext({
+                storageState: STATE_PATH,
+                locale: 'ja-JP',
+                viewport: { width: 1365, height: 900 },
+                userAgent:
+                  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              });
+
+              await context.addInitScript(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+              });
+        
+              await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+        
+              page = await context.newPage();
+              page.setDefaultTimeout(180000);
+        
+              page.on('console', msg => console.log('BROWSER_CONSOLE:', msg.type(), msg.text()));
+              page.on('pageerror', err => console.log('BROWSER_PAGEERROR:', err.message));
+              page.on('requestfailed', req => console.log('REQ_FAILED:', req.url(), req.failure()?.errorText));
+              page.on('request', req => {
+                const u = req.url();
+                if (u.includes('note.com/api/v1/text_notes')) console.log('DEBUG_REQ:', req.method(), u);
+              });
+              page.on('response', res => {
+                const u = res.url();
+                if (u.includes('note.com/api/v1/text_notes')) console.log('DEBUG_RES:', res.status(), res.request().method(), u);
+              });
+        
+              const rawState = fs.readFileSync(STATE_PATH, 'utf8');
+              console.log('DEBUG_STATE_BYTES=', rawState.length);
+        
+              const cookies0 = await context.cookies();
+              const noteCookies0 = cookies0.filter(c => (c.domain || '').includes('note.com'));
+              console.log('DEBUG_NOTE_COOKIE_COUNT(before goto)=', noteCookies0.length);
+              console.log('DEBUG_NOTE_COOKIE_NAMES(before goto)=', noteCookies0.map(c => c.name).slice(0, 30).join(','));
+        
+              const resp = await context.request.get('https://note.com/api/v2/current_user');
+              console.log('DEBUG_current_user_status=', resp.status());
+              const txt = await resp.text();
+              console.log('DEBUG_current_user_body_head=', txt.slice(0, 200));
+        
+              await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+              await page.waitForTimeout(3000);
+        
+              await context.storageState({ path: 'runtime-state.json' });
+              console.log('DEBUG_SAVED_RUNTIME_STATE=runtime-state.json');
+        
+              // /new → /notes/.../edit/ に遷移するのを待つ
+              console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
               await page.waitForURL(/\/notes\/[^/]+\/edit\/?/i, { timeout: 60000 }).catch(() => {});
               console.log('DEBUG_URL_AFTER_WAIT_EDIT=' + page.url());
-            }
-
-            await page.screenshot({ path: SS_PATH, fullPage: true });
-            console.log('SCREENSHOT=' + SS_PATH);
-            
-            console.log('DEBUG_FRAME_COUNT=', page.frames().length);
-            console.log('DEBUG_FRAMES=', page.frames().map(f => f.url()).join(' | '));
-
-            // ---- ここが超重要：エディタのDOMが揃うまで待つ ----
-            await page.waitForFunction(() => {
-              const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
-              const visible = els.filter(el => {
-                const r = el.getBoundingClientRect();
-                return r.width > 30 && r.height > 10;
-              });
-              return visible.length >= 2; // タイトル＋本文を期待
-            }, { timeout: 60000 }).catch(() => {});
-
-            const editable = page.locator('[contenteditable="true"]');
-            const editableCount = await editable.count();
-            console.log('DEBUG_EDITABLE_COUNT=', editableCount);
-            
-            if (editableCount < 1) {
-              fs.writeFileSync('debug.html', await page.content());
-              await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
-              throw new Error('Editor not ready (no contenteditable found)');
-            }
-
-
-
-
-            await Promise.race([
-              page.waitForSelector(editorReadySelectors.join(','), { timeout: 60000 }),
-              page.waitForSelector(loginOrBlockSelectors.join(','), { timeout: 60000 }),
-            ]).catch(() => {});
-
-            console.log('DEBUG_URL_AFTER_GOTO=' + page.url());
-            await page.screenshot({ path: SS_PATH, fullPage: true });
-            console.log('SCREENSHOT=' + SS_PATH);
-
-            const editorReady = page.locator(editorReadySelectors.join(',')).first();
-            const loginLike = page.locator(loginOrBlockSelectors.join(',')).first();
-
-            const isEditorReady = await editorReady.isVisible().catch(() => false);
-            const isLoginLike = await loginLike.isVisible().catch(() => false);
-
-            console.log('DEBUG_IS_EDITOR_READY=', isEditorReady);
-            console.log('DEBUG_IS_LOGIN_LIKE=', isLoginLike);
-
-            if (!isEditorReady) {
-              fs.writeFileSync('debug.html', await page.content());
-              if (isLoginLike) {
-                await page.screenshot({ path: 'debug-login.png', fullPage: true });
-                throw new Error('Not logged in (login UI detected)');
-              } else {
-                await page.screenshot({ path: 'debug-not-ready.png', fullPage: true });
-                throw new Error('Editor not ready (JS init failed / blocked / network)');
-              }
-            }
-
-           // ===== タイトルは別要素、本文は contenteditable(0) を使う =====
-
-            // 本文（唯一のcontenteditable）
-            const bodyBox = page.locator('[contenteditable="true"]').first();
-            await bodyBox.waitFor({ state: 'visible', timeout: 60000 });
-            
-            // タイトル（候補を広めに）
-            const titleCandidates = [
-              // input/textarea 系（titleっぽい placeholder / name）
-              'input[placeholder*="タイトル"]',
-              'textarea[placeholder*="タイトル"]',
-              'input[name*="title" i]',
-              'textarea[name*="title" i]',
-            
-              // label / aria
-              'input[aria-label*="タイトル"]',
-              'textarea[aria-label*="タイトル"]',
-            
-              // data-testid / testid
-              '[data-testid*="title" i] input',
-              '[data-testid*="title" i] textarea',
-              '[data-testid*="title" i]',
-            
-              // role=textbox がタイトル側に付くケース
-              '[role="textbox"][aria-label*="タイトル"]',
-              '[role="textbox"][data-testid*="title" i]',
-            
-              // 最終手段：見出し入力っぽい1行textbox（複数ある場合は後で調整）
-              'input[type="text"]',
-            ];
-            
-            let titleEl = null;
-            for (const sel of titleCandidates) {
-              const loc = page.locator(sel).first();
-              if (await loc.isVisible().catch(() => false)) { titleEl = loc; break; }
-            }
-            
-            if (!titleEl) {
-              // DOM確認用にHTML/スクショ残して落とす
-              fs.writeFileSync('debug-title.html', await page.content());
-              await page.screenshot({ path: 'debug-title.png', fullPage: true });
-              throw new Error('Title element not found (candidates exhausted)');
-            }
-            
-            // タイトル入力（input/textareaならfill、それ以外はキーボード）
-            const tagName = await titleEl.evaluate(el => el.tagName.toLowerCase());
-            if (tagName === 'input' || tagName === 'textarea') {
-              await titleEl.fill(TITLE);
-            } else {
-              await titleEl.click({ force: true });
+        
+              await page.screenshot({ path: SS_PATH, fullPage: true });
+              console.log('SCREENSHOT=' + SS_PATH);
+        
+              // エディタ準備：contenteditable が見えるまで待つ（今のUIは1個）
+              await page.waitForSelector('[contenteditable="true"]', { timeout: 60000 });
+              const editor = page.locator('[contenteditable="true"]').first();
+        
+              const editableCount = await page.locator('[contenteditable="true"]').count();
+              console.log('DEBUG_EDITABLE_COUNT=', editableCount);
+        
+              // タイトル+本文を同一エディタに投入（タイトル→改行→本文HTML）
+              await editor.click({ force: true });
               await page.keyboard.press('Control+A');
+              await page.keyboard.press('Backspace');
+        
+              // まずタイトルを入力して改行（ProseMirrorは Enter が段落になる）
               await page.keyboard.type(TITLE, { delay: 5 });
-            }
-            
-            // 本文入力（HTML挿入）
-            await bodyBox.click({ force: true });
-            await page.keyboard.press('Control+A');
-            await page.keyboard.press('Backspace');
-            await insertHTML(page, bodyBox, rawBodyHtml);
-            await page.waitForTimeout(200);
-
-            if (!IS_PUBLIC) {
-            const saveBtn = page.locator('button:has-text("下書き保存"), [aria-label*="下書き保存"]').first();
-            await saveBtn.waitFor({ state: 'visible' });
-            if (await saveBtn.isEnabled()) {
-              await saveBtn.click();
-              await page.locator('text=保存しました').waitFor({ timeout: 4000 }).catch(() => {});
-            }
-            await page.screenshot({ path: SS_PATH, fullPage: true });
-            console.log('DRAFT_URL=' + page.url());
-            console.log('SCREENSHOT=' + SS_PATH);
-          
-            // ★トップレベルreturn禁止なので、正常終了用の例外で抜ける（finallyは必ず走る）
-            throw new Error('__DONE_DRAFT__');
-          }
-
-
-            const proceed = page.locator('button:has-text("公開に進む")').first();
-            await proceed.waitFor({ state: 'visible' });
-            for (let i = 0; i < 20; i++) {
-              if (await proceed.isEnabled()) break;
-              await page.waitForTimeout(100);
-            }
-            await proceed.click({ force: true });
-
-            await Promise.race([
-              page.waitForURL(/\/publish/i).catch(() => {}),
-              page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible' }).catch(() => {})
-            ]);
-
-            const tags = (TAGS || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean);
-            if (tags.length) {
-              let tagInput = page.locator('input[placeholder*="ハッシュタグ"]');
-              if (!(await tagInput.count())) tagInput = page.locator('input[role="combobox"]').first();
-              await tagInput.waitFor({ state: 'visible' });
-              for (const t of tags) {
-                await tagInput.click();
-                await tagInput.fill(t);
-                await page.keyboard.press('Enter');
-                await page.waitForTimeout(120);
+              await page.keyboard.press('Enter');
+              await page.keyboard.press('Enter'); // 見た目余白（好みで1回にしてOK）
+        
+              // HTML本文を挿入（末尾へ）
+              await insertHTML(editor, rawBodyHtml);
+              await page.waitForTimeout(300);
+        
+              if (!IS_PUBLIC) {
+                const saveBtn = page.locator('button:has-text("下書き保存"), [aria-label*="下書き保存"]').first();
+                await saveBtn.waitFor({ state: 'visible', timeout: 60000 });
+                await saveBtn.click({ force: true });
+                await page.locator('text=保存しました').waitFor({ timeout: 10000 }).catch(() => {});
+                await page.screenshot({ path: SS_PATH, fullPage: true });
+                console.log('DRAFT_URL=' + page.url());
+                console.log('SCREENSHOT=' + SS_PATH);
+                throw new Error('__DONE_DRAFT__');
               }
+        
+              // 公開フロー（必要ならここを詰める）
+              const proceed = page.locator('button:has-text("公開に進む")').first();
+              await proceed.waitFor({ state: 'visible', timeout: 60000 });
+              await proceed.click({ force: true });
+        
+              await Promise.race([
+                page.waitForURL(/\/publish/i).catch(() => {}),
+                page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible' }).catch(() => {})
+              ]);
+        
+              // タグ
+              const tags = (TAGS || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+              if (tags.length) {
+                let tagInput = page.locator('input[placeholder*="ハッシュタグ"]');
+                if (!(await tagInput.count())) tagInput = page.locator('input[role="combobox"]').first();
+                await tagInput.waitFor({ state: 'visible', timeout: 60000 });
+                for (const t of tags) {
+                  await tagInput.click({ force: true });
+                  await tagInput.fill(t);
+                  await page.keyboard.press('Enter');
+                  await page.waitForTimeout(120);
+                }
+              }
+        
+              const publishBtn = page.locator('button:has-text("投稿する")').first();
+              await publishBtn.waitFor({ state: 'visible', timeout: 60000 });
+              await publishBtn.click({ force: true });
+        
+              await Promise.race([
+                page.waitForURL(u => !/\/publish/i.test(typeof u === 'string' ? u : u.toString()), { timeout: 20000 }).catch(() => {}),
+                page.locator('text=投稿しました').first().waitFor({ timeout: 10000 }).catch(() => {}),
+                page.waitForTimeout(5000)
+              ]);
+        
+              await page.screenshot({ path: SS_PATH, fullPage: true });
+              console.log('PUBLISHED_URL=' + page.url());
+              console.log('SCREENSHOT=' + SS_PATH);
+        
+            } finally {
+              try { await context?.tracing?.stop({ path: 'trace.zip' }); } catch {}
+              try { await page?.close(); } catch {}
+              try { await context?.close(); } catch {}
+              try { await browser?.close(); } catch {}
             }
-
-            const publishBtn = page.locator('button:has-text("投稿する")').first();
-            await publishBtn.waitFor({ state: 'visible' });
-            for (let i = 0; i < 20; i++) {
-              if (await publishBtn.isEnabled()) break;
-              await page.waitForTimeout(100);
-            }
-            await publishBtn.click({ force: true });
-
-            await Promise.race([
-              page.waitForURL(u => !/\/publish/i.test(typeof u === 'string' ? u : u.toString()), { timeout: 20000 }).catch(() => {}),
-              page.locator('text=投稿しました').first().waitFor({ timeout: 8000 }).catch(() => {}),
-              page.waitForTimeout(5000)
-            ]);
-
-            await page.screenshot({ path: SS_PATH, fullPage: true });
-            console.log('PUBLISHED_URL=' + page.url());
-            console.log('SCREENSHOT=' + SS_PATH);
-
-          } finally {
-            try { await context?.tracing?.stop({ path: 'trace.zip' }); } catch {}
-            try { await page?.close(); } catch {}
-            try { await context?.close(); } catch {}
-            try { await browser?.close(); } catch {}
           }
-          EOF
-          node post.mjs 2>&1 | tee -a post.log
 
+          main().catch((e) => {
+            // 下書き保存は成功終了にする
+            if (e && e.message === '__DONE_DRAFT__') {
+              console.log('DEBUG: done draft -> exit 0');
+              process.exit(0);
+            }
+            console.error(e);
+            process.exit(1);
+          });
+          EOF
+        
+          node post.mjs 2>&1 | tee -a post.log
+        
           mkdir -p note-screenshots || true
           cp -r /tmp/note-screenshots/* note-screenshots/ 2>/dev/null || true
-
-
+        
           url=$(grep '^PUBLISHED_URL=' post.log | tail -n1 | cut -d'=' -f2-)
           draft=$(grep '^DRAFT_URL=' post.log | tail -n1 | cut -d'=' -f2-)
           shot=$(grep '^SCREENSHOT=' post.log | tail -n1 | cut -d'=' -f2-)
-
+        
           if [ -n "$url" ]; then echo "published_url=$url" >> $GITHUB_OUTPUT; fi
           if [ -n "$draft" ]; then echo "draft_url=$draft" >> $GITHUB_OUTPUT; fi
           if [ -n "$shot" ]; then echo "screenshot=$shot" >> $GITHUB_OUTPUT; fi
 
-      - name: Upload debug artifacts
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: note-debug-${{ github.run_id }}
-          if-no-files-found: warn
-          path: |
-            post.log
-            debug.html
-            debug.png
-            debug-login.png
-            debug-not-ready.png
-            trace.zip
-            note-screenshots/**
 
