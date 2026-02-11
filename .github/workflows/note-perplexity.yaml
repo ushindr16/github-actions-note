@@ -395,7 +395,7 @@ jobs:
               await page.screenshot({ path: SS_PATH, fullPage: true });
               console.log('DRAFT_URL=' + page.url());
               console.log('SCREENSHOT=' + SS_PATH);
-              return;
+              process.exit(0);
             }
 
             const proceed = page.locator('button:has-text("公開に進む")').first();
