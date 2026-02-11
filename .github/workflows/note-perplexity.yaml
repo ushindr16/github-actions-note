@@ -85,6 +85,8 @@ jobs:
                 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               'Accept': 'text/html,application/xhtml+xml'
             }
+            const finalUrl = res.url; // ★これが超重要（redirect後のURL）
+            console.log('DEBUG_FETCH_FINAL_URL=', finalUrl)
           });
 
           if (!res.ok) {
@@ -94,7 +96,7 @@ jobs:
 
           const html = await res.text();
 
-          const dom = new JSDOM(html, { url });
+          const dom = new JSDOM(html, { url: finalUrl });
           const reader = new Readability(dom.window.document);
           const article = reader.parse();
 
@@ -109,7 +111,7 @@ jobs:
             .filter(Boolean);
 
           const attributionHtml =
-            `<p><strong>出典</strong>: <a href="${url}" rel="nofollow noopener" target="_blank">${url}</a></p><hr/>`;
+            `<p><strong>出典</strong>: <a href="${finalUrl}" rel="nofollow noopener" target="_blank">${finalUrl}</a></p><hr/>`;
 
           const out = {
             title: (article.title || '').trim() || '（タイトル取得失敗）',
